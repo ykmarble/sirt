@@ -16,7 +16,7 @@ def load_rawimage(path):
         print(width, height)
         img_seq = struct.unpack("{}f".format(width*height), f.read())
     img = Image.new("F", (width, height))
-    img.putdata(img_seq)
+    img.putdata([i * 255 for i in img_seq])
     return img
 
 def main():

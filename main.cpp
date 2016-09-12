@@ -1,3 +1,5 @@
+#define EIGEN_NO_DEBUG
+
 #include <eigen3/Eigen/Core>
 #include <cstdio>
 #include <cstdlib>
@@ -27,6 +29,8 @@ MatrixXf load_rawimage(const char *path) {
 void save_rawimage(const char *path, const MatrixXf &img) {
     char magic[] = {'P', '0', 0x00, 0x00};
     Matrix<float, Dynamic, Dynamic, RowMajor> img_t = img;
+    img_t = (img_t.array() - img_t.minCoeff()).matrix();
+    img_t /= img_t.maxCoeff();
     unsigned int width = img_t.cols();
     unsigned int height = img_t.rows();
     FILE* f = fopen(path, "wb");
@@ -37,31 +41,6 @@ void save_rawimage(const char *path, const MatrixXf &img) {
     fclose(f);
 }
 
-void index_in_Point(int x, int y, int width, int height, Vector2f* p) {
-    (*p)(0) = (x - width / 2.0) / (width / 2.0);
-    (*p)(1) = - (y - height / 2.0) / (height / 2.0);
-}
-
-float index_in_deg(int index) {
-    return (float)index / NumOfAngle * 2 * M_PI;
-}
-
-int calc_proj_sign(const Vector2f &pixel, const float deg) {
-    float y = pixel(1);
-    float x = pixel(0);
-    float a = tan(deg);
-    int right_hand_sign = deg > M_PI_2 && deg < 3 * M_PI_2 ? -1 : 1;
-    int is_higher = y > a * x ? 1 : -1;
-    return is_higher * right_hand_sign;
-}
-
-float point_on_detector(const Vector2f &pixel, float deg) {
-    Vector2f base(cos(deg), sin(deg));
-    float r = pixel.dot(base);
-    float dist = (pixel - r * base).norm();
-    int sign = calc_proj_sign(pixel, deg);
-    return sign * dist;
-}
 
 void projection(const MatrixXf &img ,MatrixXf *proj) {
     // 画像の中心(0, 0)から下ろした垂線は角度によらず*projのド真ん中に落ちることをうまく使う
@@ -69,15 +48,27 @@ void projection(const MatrixXf &img ,MatrixXf *proj) {
     // ファンビームではX線源の位置も関わってくるが、X線源を中心とした同心円の中心を通る垂線との弧(あるいはその三角形)を考えて相似を使えばいいと思われる
     // Pointのk(cos t, sin t)Tへの射影
     // *projの長さは高々画像の対角線である
-    for (int y = 0; y < img.rows(); y++) {
-        for (int x = 0; x < img.cols(); x++) {
-            auto val = img(y, x);
-            Vector2f p;
-            index_in_Point(x, y, img.cols(), img.rows(), &p);
-            for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
-                float deg = index_in_deg(deg_i);
-                float dist = point_on_detector(p, deg) * img.rows() / 2.0;
-                int l = floor(dist) + proj->rows() / 2;
+    float width_2 = img.cols() / 2.0;
+    float height_2 = img.rows() / 2.0;
+    int detector_offset = proj->rows() / 2;
+    float val;
+    Vector2f p;  // normalized position
+    Vector2f base;
+    for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
+        float deg = (float)deg_i / NumOfAngle * 2 * M_PI;
+        float a = tan(deg);
+        int right_hand_sign = deg > M_PI_2 && deg < 3 * M_PI_2 ? -1 : 1;
+        base << cos(deg), sin(deg);
+        for (int y = 0; y < img.rows(); y++) {
+            for (int x = 0; x < img.cols(); x++) {
+                val = img(y, x);
+                p(0) = (x - width_2) / width_2;
+                p(1) = - (y - height_2) / height_2;
+                int is_higher = p(1) > a * p(0) ? 1 : -1;
+                int sign = is_higher * right_hand_sign;
+                float dist = (p - p.dot(base) * base).norm() * height_2;
+                dist *= sign;
+                int l = floor(dist) + detector_offset;
                 int h = l + 1;
                 float h_ratio = dist - floor(dist);
                 float l_ratio = 1 - h_ratio;
@@ -86,19 +77,32 @@ void projection(const MatrixXf &img ,MatrixXf *proj) {
             }
         }
     }
-    *proj /= proj->maxCoeff();
-    *proj *= 255;
+    float denom = max(-proj->minCoeff(), proj->maxCoeff());
+    if (denom != 0)
+        *proj /= denom;
+    printf("proj: %f %f %f %f\n", img.minCoeff(), img.maxCoeff(), proj->minCoeff(), proj->maxCoeff());
 }
 
 void inv_projection(const MatrixXf &proj, MatrixXf *img) {
-    for (int y = 0; y < img->rows(); y++) {
-        for (int x = 0; x < img->cols(); x++) {
-            Vector2f p;
-            index_in_Point(x, y, img->cols(), img->rows(), &p);
-            for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
-                float deg = index_in_deg(deg_i);
-                float dist = point_on_detector(p, deg) * img->rows() / 2.0;
-                int l = floor(dist) + proj.rows() / 2;
+    float width_2 = img->cols() / 2.0;
+    float height_2 = img->rows() / 2.0;
+    int detector_offset = proj.rows() / 2;
+    Vector2f p;  // normalized position
+    Vector2f base;
+    for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
+        float deg = (float)deg_i / NumOfAngle * 2 * M_PI;
+        float a = tan(deg);
+        int right_hand_sign = deg > M_PI_2 && deg < 3 * M_PI_2 ? -1 : 1;
+        base << cos(deg), sin(deg);
+        for (int y = 0; y < img->rows(); y++) {
+            for (int x = 0; x < img->cols(); x++) {
+                p(0) = (x - width_2) / width_2;
+                p(1) = - (y - height_2) / height_2;
+                int is_higher = p(1) > a * p(0) ? 1 : -1;
+                int sign = is_higher * right_hand_sign;
+                float dist = (p - p.dot(base) * base).norm() * height_2;
+                dist *= sign;
+                int l = floor(dist) + detector_offset;
                 int h = l + 1;
                 float h_ratio = dist - floor(dist);
                 float l_ratio = 1 - h_ratio;
@@ -106,8 +110,30 @@ void inv_projection(const MatrixXf &proj, MatrixXf *img) {
             }
         }
     }
-    *img /= img->maxCoeff();
-    *img *= 255;
+    float denom = max(-img->minCoeff(), img->maxCoeff());
+    if (denom != 0)
+        *img /= denom;
+    printf("inv proj: %f %f %f %f\n", proj.minCoeff(), proj.maxCoeff(), img->minCoeff(), img->maxCoeff());
+}
+
+void sirt(const MatrixXf &data, MatrixXf *img) {
+    *img = MatrixXf::Zero(img->rows(), img->cols());
+    MatrixXf proj = MatrixXf::Zero(data.rows(), data.cols());
+    MatrixXf grad = MatrixXf::Zero(img->rows(), img->cols());
+    float alpha = 0.000005;
+    int i = 0;
+    float error = 1;
+    float last_error = error;
+    projection(*img, &proj);
+    while (error <= last_error) {
+        last_error = error;
+        inv_projection(data - proj, &grad);
+        *img += alpha * grad;
+        projection(*img, &proj);
+        error = (proj - data).array().abs().sum() / (data.cols() * data.rows());
+        i++;
+        printf("%d: %f\n", i, error);
+    }
 }
 }
 
@@ -126,5 +152,7 @@ int main(int argc, char** argv) {
     inv_projection(proj, &inv_proj);
     save_rawimage("out_inv_proj.dat", inv_proj);
     printf("inv project\n");
+    sirt(proj, &inv_proj);
+    save_rawimage("out_sirt.dat", inv_proj);
     return 0;
 }
