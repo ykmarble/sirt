@@ -48,20 +48,20 @@ void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
     // ファンビームではX線源の位置も関わってくるが、X線源を中心とした同心円の中心を通る垂線との弧(あるいはその三角形)を考えて相似を使えばいいと思われる
     // Pointのk(cos t, sin t)Tへの射影
     // *projの長さは高々画像の対角線である
-    float width_2 = img->cols() / 2.0;
-    float height_2 = img->rows() / 2.0;
-    int detector_offset = proj->rows() / 2;
+    float width_offset = (img->cols() - 1) / 2.0;
+    float height_offset = (img->rows() - 1) / 2.0;
+    int detector_centor = proj->rows() / 2;
     for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
         float deg = (float)deg_i / NumOfAngle * 2 * M_PI;
         float a = sin(deg);
         float b = -cos(deg);
         for (int y_i = 0; y_i < img->rows(); y_i++) {
             for (int x_i = 0; x_i < img->cols(); x_i++) {
-                float x = (x_i - width_2) / width_2;
-                float y  = - (y_i - height_2) / height_2;
+                float x = x_i - width_offset;
+                float y  = (img->rows() - 1 - y_i) - height_offset;
                 int sign = b * y > a * x ? 1 : -1;
-                float dist = sign * abs(a * x + b * y) * height_2;
-                int l = floor(dist) + detector_offset;
+                float dist = sign * abs(a * x + b * y);
+                int l = floor(dist) + detector_centor;
                 int h = l + 1;
                 float h_ratio = dist - floor(dist);
                 float l_ratio = 1 - h_ratio;
@@ -91,25 +91,17 @@ void sirt(const MatrixXf &data, MatrixXf *img) {
     inv_projection(data, img);
     MatrixXf proj = MatrixXf::Zero(data.rows(), data.cols());;
     MatrixXf grad = MatrixXf::Zero(img->rows(), img->cols());;
-    float alpha = 0.01;
+    float alpha = 5;
     int i = 0;
-    float error = 100000000;
-    float last_error = error;
+    float error = 10000;
     projection(*img, &proj);
-    while (i < 250) {
-
-        proj = MatrixXf::Zero(data.rows(), data.cols());
+    while (error > 0.1 ) {
         grad = MatrixXf::Zero(img->rows(), img->cols());
         inv_projection(data - proj, &grad);
         *img += alpha * grad;
+        proj = MatrixXf::Zero(data.rows(), data.cols());
         projection(*img, &proj);
         error = (proj - data).array().abs().sum() / (data.cols() * data.rows());
-        if (last_error < error) {
-            *img -= alpha * grad;
-            alpha /= 2;
-        } else {
-            last_error = error;
-        }
         i++;
         printf("%d: %f\n", i, error);
     }
@@ -125,13 +117,14 @@ int main(int argc, char** argv) {
     int detector_len = ceil(sqrt(pow(img.rows(), 2) + pow(img.cols(), 2)));
     MatrixXf proj = MatrixXf::Zero(detector_len + 2, NumOfAngle);
     projection(img, &proj);
-    save_rawimage("out_proj.dat", proj);
+    save_rawimage("out/proj.dat", proj);
     printf("project\n");
     MatrixXf inv_proj = MatrixXf::Zero(img.rows(), img.cols());
     inv_projection(proj, &inv_proj);
-    save_rawimage("out_inv_proj.dat", inv_proj);
+    save_rawimage("out/inv_proj.dat", inv_proj);
     printf("inv project\n");
-    sirt(proj, &inv_proj);
-    save_rawimage("out_sirt.dat", inv_proj);
+    MatrixXf recon = MatrixXf::Zero(img.rows(), img.cols());
+    sirt(proj, &recon);
+    save_rawimage("out/recon.dat", recon);
     return 0;
 }
