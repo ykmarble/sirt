@@ -8,7 +8,7 @@ import struct
 
 def save_rawimage(img, outpath):
     img = img.convert("F")
-    img_seq = [i / 255.0 for i in img.getdata()]
+    img_seq = img.getdata()
     header = struct.pack("ccxxII", b"P", b"0", img.width, img.height)
     payload = struct.pack("{}f".format(len(img_seq)), *img_seq)
     with open(outpath, "wb") as f:

@@ -8,7 +8,7 @@
 
 namespace {
 
-const int NumOfAngle = 360;
+const int NumOfAngle = 512;
 
 using namespace Eigen;
 using namespace std;
@@ -31,6 +31,7 @@ void save_rawimage(const char *path, const MatrixXf &img) {
     Matrix<float, Dynamic, Dynamic, RowMajor> img_t = img;
     img_t = (img_t.array() - img_t.minCoeff()).matrix();
     img_t /= img_t.maxCoeff();
+    img_t *= 255;
     unsigned int width = img_t.cols();
     unsigned int height = img_t.rows();
     FILE* f = fopen(path, "wb");
@@ -41,96 +42,74 @@ void save_rawimage(const char *path, const MatrixXf &img) {
     fclose(f);
 }
 
-
-void projection(const MatrixXf &img ,MatrixXf *proj) {
+void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
     // 画像の中心(0, 0)から下ろした垂線は角度によらず*projのド真ん中に落ちることをうまく使う
     // とりあえずは平行ビームで考えると、pixelと(0, 0)を通る垂線との距離がそのまま*projの中心との距離になる
     // ファンビームではX線源の位置も関わってくるが、X線源を中心とした同心円の中心を通る垂線との弧(あるいはその三角形)を考えて相似を使えばいいと思われる
     // Pointのk(cos t, sin t)Tへの射影
     // *projの長さは高々画像の対角線である
-    float width_2 = img.cols() / 2.0;
-    float height_2 = img.rows() / 2.0;
+    float width_2 = img->cols() / 2.0;
+    float height_2 = img->rows() / 2.0;
     int detector_offset = proj->rows() / 2;
-    float val;
-    Vector2f p;  // normalized position
-    Vector2f base;
     for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
         float deg = (float)deg_i / NumOfAngle * 2 * M_PI;
-        float a = tan(deg);
-        int right_hand_sign = deg > M_PI_2 && deg < 3 * M_PI_2 ? -1 : 1;
-        base << cos(deg), sin(deg);
-        for (int y = 0; y < img.rows(); y++) {
-            for (int x = 0; x < img.cols(); x++) {
-                val = img(y, x);
-                p(0) = (x - width_2) / width_2;
-                p(1) = - (y - height_2) / height_2;
-                int is_higher = p(1) > a * p(0) ? 1 : -1;
-                int sign = is_higher * right_hand_sign;
-                float dist = (p - p.dot(base) * base).norm() * height_2;
-                dist *= sign;
+        float a = sin(deg);
+        float b = -cos(deg);
+        for (int y_i = 0; y_i < img->rows(); y_i++) {
+            for (int x_i = 0; x_i < img->cols(); x_i++) {
+                float x = (x_i - width_2) / width_2;
+                float y  = - (y_i - height_2) / height_2;
+                int sign = b * y > a * x ? 1 : -1;
+                float dist = sign * abs(a * x + b * y) * height_2;
                 int l = floor(dist) + detector_offset;
                 int h = l + 1;
                 float h_ratio = dist - floor(dist);
                 float l_ratio = 1 - h_ratio;
-                (*proj)(l, deg_i) += val * l_ratio;
-                (*proj)(h, deg_i) += val * h_ratio;
+                if (inverse) {
+                    (*img)(y_i, x_i) += (*proj)(l, deg_i) * l_ratio / NumOfAngle;
+                    (*img)(y_i, x_i) += (*proj)(h, deg_i) * h_ratio / NumOfAngle;
+                } else {
+                    float val = (*img)(y_i, x_i) / (2 * proj->rows());
+                    (*proj)(l, deg_i) += val * l_ratio;
+                    (*proj)(h, deg_i) += val * h_ratio;
+                }
             }
         }
     }
-    float denom = max(-proj->minCoeff(), proj->maxCoeff());
-    if (denom != 0)
-        *proj /= denom;
-    printf("proj: %f %f %f %f\n", img.minCoeff(), img.maxCoeff(), proj->minCoeff(), proj->maxCoeff());
+}
+
+void projection(const MatrixXf &img ,MatrixXf *proj) {
+    inner_proj((MatrixXf*)&img, proj, false);
 }
 
 void inv_projection(const MatrixXf &proj, MatrixXf *img) {
-    float width_2 = img->cols() / 2.0;
-    float height_2 = img->rows() / 2.0;
-    int detector_offset = proj.rows() / 2;
-    Vector2f p;  // normalized position
-    Vector2f base;
-    for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
-        float deg = (float)deg_i / NumOfAngle * 2 * M_PI;
-        float a = tan(deg);
-        int right_hand_sign = deg > M_PI_2 && deg < 3 * M_PI_2 ? -1 : 1;
-        base << cos(deg), sin(deg);
-        for (int y = 0; y < img->rows(); y++) {
-            for (int x = 0; x < img->cols(); x++) {
-                p(0) = (x - width_2) / width_2;
-                p(1) = - (y - height_2) / height_2;
-                int is_higher = p(1) > a * p(0) ? 1 : -1;
-                int sign = is_higher * right_hand_sign;
-                float dist = (p - p.dot(base) * base).norm() * height_2;
-                dist *= sign;
-                int l = floor(dist) + detector_offset;
-                int h = l + 1;
-                float h_ratio = dist - floor(dist);
-                float l_ratio = 1 - h_ratio;
-                (*img)(y, x) += proj(l, deg_i) * l_ratio + proj(h, deg_i) * h_ratio;
-            }
-        }
-    }
-    float denom = max(-img->minCoeff(), img->maxCoeff());
-    if (denom != 0)
-        *img /= denom;
-    printf("inv proj: %f %f %f %f\n", proj.minCoeff(), proj.maxCoeff(), img->minCoeff(), img->maxCoeff());
+    inner_proj(img, (MatrixXf*)&proj, true);
 }
 
 void sirt(const MatrixXf &data, MatrixXf *img) {
     *img = MatrixXf::Zero(img->rows(), img->cols());
-    MatrixXf proj = MatrixXf::Zero(data.rows(), data.cols());
-    MatrixXf grad = MatrixXf::Zero(img->rows(), img->cols());
-    float alpha = 0.000005;
+    inv_projection(data, img);
+    MatrixXf proj = MatrixXf::Zero(data.rows(), data.cols());;
+    MatrixXf grad = MatrixXf::Zero(img->rows(), img->cols());;
+    float alpha = 0.01;
     int i = 0;
-    float error = 1;
+    float error = 100000000;
     float last_error = error;
     projection(*img, &proj);
-    while (error <= last_error) {
-        last_error = error;
+    while (i < 250) {
+
+        proj = MatrixXf::Zero(data.rows(), data.cols());
+        grad = MatrixXf::Zero(img->rows(), img->cols());
         inv_projection(data - proj, &grad);
         *img += alpha * grad;
         projection(*img, &proj);
         error = (proj - data).array().abs().sum() / (data.cols() * data.rows());
+        if (last_error < error) {
+            *img -= alpha * grad;
+            alpha /= 2;
+        } else {
+            last_error = error;
+        }
         i++;
         printf("%d: %f\n", i, error);
     }
