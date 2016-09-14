@@ -1,4 +1,4 @@
-#define EIGEN_NO_DEBUG
+//#define EIGEN_NO_DEBUG
 
 #include <eigen3/Eigen/Core>
 #include <cstdio>
@@ -50,7 +50,7 @@ void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
     // *projの長さは高々画像の対角線である
     float width_offset = (img->cols() - 1) / 2.0;
     float height_offset = (img->rows() - 1) / 2.0;
-    int detector_centor = proj->rows() / 2;
+    float detector_offset = (proj->rows() - 1) / 2.0;
     for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
         float deg = (float)deg_i / NumOfAngle * 2 * M_PI;
         float a = sin(deg);
@@ -58,10 +58,10 @@ void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
         for (int y_i = 0; y_i < img->rows(); y_i++) {
             for (int x_i = 0; x_i < img->cols(); x_i++) {
                 float x = x_i - width_offset;
-                float y  = (img->rows() - 1 - y_i) - height_offset;
+                float y  = height_offset - y_i;
                 int sign = b * y > a * x ? 1 : -1;
                 float dist = sign * abs(a * x + b * y);
-                int l = floor(dist) + detector_centor;
+                int l = floor(dist + detector_offset);
                 int h = l + 1;
                 float h_ratio = dist - floor(dist);
                 float l_ratio = 1 - h_ratio;
@@ -101,9 +101,11 @@ void sirt(const MatrixXf &data, MatrixXf *img) {
         *img += alpha * grad;
         proj = MatrixXf::Zero(data.rows(), data.cols());
         projection(*img, &proj);
-        error = (proj - data).array().abs().sum() / (data.cols() * data.rows());
         i++;
-        printf("%d: %f\n", i, error);
+        if (i % 10 == 0) {
+            error = (proj - data).array().abs().sum() / (data.cols() * data.rows());
+            printf("%d: %f\n", i, error);
+        }
     }
 }
 }
