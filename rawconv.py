@@ -15,7 +15,6 @@ def save_rawimage(img, outpath):
         f.write(header)
         f.write(payload)
 
-
 def main():
     if (len(sys.argv) < 2):
         print("Usage: {} file...".format(sys.argv[0]))
