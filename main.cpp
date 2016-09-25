@@ -1,6 +1,9 @@
 #define EIGEN_NO_DEBUG
 
 #include <eigen3/Eigen/Core>
+#include <opencv2/core/core.hpp>
+#include <opencv2/core/eigen.hpp>
+#include <opencv2/highgui/highgui.hpp>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -12,6 +15,20 @@ const int NumOfAngle = 512;
 
 using namespace Eigen;
 using namespace std;
+
+void normalize_image(MatrixXf *img)
+{
+    *img = ((*img).array() - (*img).minCoeff()).matrix();
+    *img /= (*img).maxCoeff();
+    *img *= 255;
+}
+
+void normalize_image(Matrix<float, Dynamic, Dynamic, RowMajor> *img)
+{
+    *img = ((*img).array() - (*img).minCoeff()).matrix();
+    *img /= (*img).maxCoeff();
+    *img *= 255;
+}
 
 MatrixXf load_rawimage(const char *path) {
     /*
@@ -35,9 +52,7 @@ void save_rawimage(const char *path, const MatrixXf &img) {
      */
     char magic[] = {'P', '0', 0x00, 0x00};
     Matrix<float, Dynamic, Dynamic, RowMajor> img_t = img;
-    img_t = (img_t.array() - img_t.minCoeff()).matrix();
-    img_t /= img_t.maxCoeff();
-    img_t *= 255;
+    normalize_image(&img_t);
     unsigned int width = img_t.cols();
     unsigned int height = img_t.rows();
     FILE* f = fopen(path, "wb");
@@ -46,6 +61,17 @@ void save_rawimage(const char *path, const MatrixXf &img) {
     fwrite(&height, sizeof(unsigned int), 1, f);
     fwrite(&img_t(0), sizeof(float), width * height, f);
     fclose(f);
+}
+
+void show_image(const MatrixXf &img)
+{
+    MatrixXf normalized = img;
+    normalize_image(&normalized);
+    normalized /= 255;
+    cv::Mat cvimg;
+    cv::eigen2cv(normalized, cvimg);
+    cv::imshow("img", cvimg);
+    cv::waitKey();
 }
 
 void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
@@ -65,21 +91,26 @@ void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
     float width_offset = (img->cols() - 1) / 2.0;
     float height_offset = (img->rows() - 1) / 2.0;
     float detector_offset = (proj->rows() - 1) / 2.0;
+    float r = pow(width_offset, 2);
 
     for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
         float deg = (float)deg_i / NumOfAngle * 2 * M_PI;
 
-        // 原点を通る検知器列に直行する直線 ax + yb = 0
+        // 原点を通る検知器列に直行する直線 ax + by = 0
         float a = sin(deg);
         float b = -cos(deg);
         for (int y_i = 0; y_i < img->rows(); y_i++) {
             for (int x_i = 0; x_i < img->cols(); x_i++) {
                 float x = x_i - width_offset;
-                float y  = height_offset - y_i;  // 行列表記と軸の方向が逆になることに注意
+                float y = height_offset - y_i;  // 行列表記と軸の方向が逆になることに注意
+
+                // 円の外は除外
+                //if (pow(x, 2) + pow(y, 2) > r)
+                //    continue;
 
                 // distは検知器中心からの距離を意味しているが、X線源に向かって右側を正とする
                 // ローカル座標で表されている。
-                int sign = b * y > a * x ? 1 : -1;  // 角度によらずこれで符号が出る
+                int sign = a * x + b * y < 0 ? 1 : -1;  // 角度によらずこれで符号が出る
                 float dist = sign * abs(a * x + b * y);
 
                 // 影響のある検知器は高々2つ、検知器上のローカル座標系でより小さい方をlとする
@@ -88,19 +119,19 @@ void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
                 float h_ratio = dist - floor(dist);
                 float l_ratio = 1 - h_ratio;
 
-                // 共に正規化の仕方が雑で雑にしか検証していない。
-                // 入力の最大最小より大きくなることはないと思う。
                 if (inverse) {
-                    (*img)(y_i, x_i) += (*proj)(l, deg_i) * l_ratio / NumOfAngle;
-                    (*img)(y_i, x_i) += (*proj)(h, deg_i) * h_ratio / NumOfAngle;
+                    (*img)(y_i, x_i) += (*proj)(l, deg_i) * l_ratio;
+                    (*img)(y_i, x_i) += (*proj)(h, deg_i) * h_ratio;
                 } else {
-                    float val = (*img)(y_i, x_i) / (2 * proj->rows());
+                    float val = (*img)(y_i, x_i);
                     (*proj)(l, deg_i) += val * l_ratio;
                     (*proj)(h, deg_i) += val * h_ratio;
                 }
             }
         }
     }
+    //printf("img_min %f, img_max %f\n", (*img).minCoeff(), (*img).maxCoeff());
+    //printf("proj_min %f, proj_max %f\n", (*proj).minCoeff(), (*proj).maxCoeff());
 }
 
 void projection(const MatrixXf &img ,MatrixXf *proj) {
@@ -108,6 +139,7 @@ void projection(const MatrixXf &img ,MatrixXf *proj) {
       `img`に順投影を施し、`proj`に得られた値を加える。
       つまり、`proj`は呼び出し元で初期化されている必要がある。
      */
+    //printf("projection:\n");
     inner_proj((MatrixXf*)&img, proj, false);
 }
 
@@ -116,6 +148,7 @@ void inv_projection(const MatrixXf &proj, MatrixXf *img) {
       `proj`に逆投影を施し、`img`に得られた値を加える。
       つまり、`img`は呼び出し元で初期化されている必要がある。
      */
+    //printf("inv_projection:\n");
     inner_proj(img, (MatrixXf*)&proj, true);
 }
 
@@ -125,24 +158,24 @@ void sirt(const MatrixXf &data, MatrixXf *img) {
       結果は`img`に格納される。
      */
     *img = MatrixXf::Zero(img->rows(), img->cols());
-    inv_projection(data, img);
     MatrixXf proj = MatrixXf::Zero(data.rows(), data.cols());;
     MatrixXf grad = MatrixXf::Zero(img->rows(), img->cols());;
-    float alpha = 5;
+    MatrixXf normalized_proj = MatrixXf::Zero(data.rows(), data.cols());;
+    float alpha = 125.0 / ((double)img->rows() * img->cols() * NumOfAngle);
     int i = 0;
-    float error = 10000;
     projection(*img, &proj);
-    while (error > 0.1 ) {
+    while (i < 50 ) {
         grad = MatrixXf::Zero(img->rows(), img->cols());
         inv_projection(data - proj, &grad);
         *img += alpha * grad;
         proj = MatrixXf::Zero(data.rows(), data.cols());
         projection(*img, &proj);
         i++;
-        if (i % 10 == 0) {
-            error = (proj - data).array().abs().sum() / (data.cols() * data.rows());
-            printf("%d: %f\n", i, error);
-        }
+        printf("%d\n", i);
+        //normalized_proj = proj;
+        //normalize_image(&normalized_proj);
+        //error = (normalized_proj - data).array().abs().sum() / (data.cols() * data.rows());
+        //printf("%d: %f\n", i, error);
     }
 }
 }
@@ -163,7 +196,10 @@ int main(int argc, char** argv) {
     save_rawimage("out/inv_proj.dat", inv_proj);
     printf("inv project\n");
     MatrixXf recon = MatrixXf::Zero(img.rows(), img.cols());
+    show_image(img);
+    show_image(inv_proj);
     sirt(proj, &recon);
+    show_image(recon);
     save_rawimage("out/recon.dat", recon);
     return 0;
 }
