@@ -16,15 +16,13 @@ const int NumOfAngle = 512;
 using namespace Eigen;
 using namespace std;
 
-void normalize_image(MatrixXf *img)
-{
+void normalize_image(MatrixXf *img) {
     *img = ((*img).array() - (*img).minCoeff()).matrix();
     *img /= (*img).maxCoeff();
     *img *= 255;
 }
 
-void normalize_image(Matrix<float, Dynamic, Dynamic, RowMajor> *img)
-{
+void normalize_image(Matrix<float, Dynamic, Dynamic, RowMajor> *img) {
     *img = ((*img).array() - (*img).minCoeff()).matrix();
     *img /= (*img).maxCoeff();
     *img *= 255;
@@ -63,8 +61,7 @@ void save_rawimage(const char *path, const MatrixXf &img) {
     fclose(f);
 }
 
-void show_image(const MatrixXf &img)
-{
+void show_image(const MatrixXf &img) {
     MatrixXf normalized = img;
     normalize_image(&normalized);
     normalized /= 255;
@@ -88,10 +85,9 @@ void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
     // 平行ビームなので角度0の時のx座標は、画像の対角線の半分以上であれば何でもいい。
 
     // 各indexに履かせる負の下駄の大きさ
-    float width_offset = (img->cols() - 1) / 2.0;
-    float height_offset = (img->rows() - 1) / 2.0;
+    float img_offset = (img->cols() - 1) / 2.0;
     float detector_offset = (proj->rows() - 1) / 2.0;
-    float r = pow(width_offset, 2);
+    float r = pow(img_offset, 2);
 
     for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
         float deg = (float)deg_i / NumOfAngle * 2 * M_PI;
@@ -99,10 +95,10 @@ void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
         // 原点を通る検知器列に直行する直線 ax + by = 0
         float a = sin(deg);
         float b = -cos(deg);
-        for (int y_i = 0; y_i < img->rows(); y_i++) {
-            for (int x_i = 0; x_i < img->cols(); x_i++) {
-                float x = x_i - width_offset;
-                float y = height_offset - y_i;  // 行列表記と軸の方向が逆になることに注意
+        for (int x_i = 0; x_i < img->cols(); x_i++) {
+            for (int y_i = 0; y_i < img->rows(); y_i++) {
+                float x = x_i - img_offset;
+                float y = img_offset - y_i;  // 行列表記と軸の方向が逆になることに注意
 
                 // 円の外は除外
                 //if (pow(x, 2) + pow(y, 2) > r)
@@ -132,6 +128,41 @@ void inner_proj(MatrixXf *img, MatrixXf *proj, bool inverse) {
     }
     //printf("img_min %f, img_max %f\n", (*img).minCoeff(), (*img).maxCoeff());
     //printf("proj_min %f, proj_max %f\n", (*proj).minCoeff(), (*proj).maxCoeff());
+}
+
+void inner_proj2(MatrixXf *img, MatrixXf *proj, bool inverse) {
+    /*
+      inner_proj の lay-driven な実装
+     */
+    VectorXf locus = VectorXf::Zero(img->cols());  // 整数値との交点
+    for (int deg_i = 0; deg_i < NumOfAngle; deg_i++) {
+        float deg = 2 * M_PI * deg_i / NumOfAngle;
+        float lay_start;  // 始点
+        float disp_lay;  // 変位 displacement
+        if (deg < M_PI_4) {
+
+        } else if (deg < 3 * M_PI_4) {
+
+        } else if (deg < 5 * M_PI_4) {
+
+        } else if (deg < 7 * M_PI_4) {
+
+        } else {
+
+        }
+
+        for (int i = 0; i < img->cols(); i++) {
+
+        }
+    }
+}
+
+void linspace(float start, float step, VextorXf* out) {
+    float y = start;
+    for (int i = 0; i < out->size(); i++) {
+        (*out)(i) = y;
+        y += step;
+    }
 }
 
 void projection(const MatrixXf &img ,MatrixXf *proj) {
@@ -186,6 +217,10 @@ int main(int argc, char** argv) {
         return 1;
     }
     MatrixXf img = load_rawimage(argv[1]);
+    if (img.rows() != img.cols()) {
+        printf("正方形になってから出直してきて欲しい。\n");
+        return -1;
+    }
     int detector_len = ceil(sqrt(pow(img.rows(), 2) + pow(img.cols(), 2)));
     MatrixXf proj = MatrixXf::Zero(detector_len + 2, NumOfAngle);
     projection(img, &proj);
